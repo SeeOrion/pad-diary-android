@@ -11,6 +11,7 @@ import android.content.res.Configuration;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
 import android.graphics.Color;
+import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.location.Location;
 import android.location.LocationListener;
@@ -82,11 +83,16 @@ public final class MainActivity extends Activity {
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom); return insets;
         });
         setContentView(root);
-        JSONObject firstBook = store.one("SELECT id FROM notebooks ORDER BY created_at DESC LIMIT 1");
-        if (firstBook != null) {
-            selectedNotebook = number(firstBook, "id");
-            JSONObject firstEntry = store.one("SELECT id FROM entries WHERE notebook_id=? ORDER BY entry_time DESC LIMIT 1", String.valueOf(selectedNotebook));
-            if (firstEntry != null) selectedEntry = number(firstEntry, "id");
+        if (state != null) {
+            selectedCategory = state.getLong("category", -1); selectedNotebook = state.getLong("notebook", -1);
+            selectedEntry = state.getLong("entry", -1); portraitPage = state.getInt("page", 0);
+        } else {
+            JSONObject firstBook = store.one("SELECT id FROM notebooks ORDER BY created_at DESC LIMIT 1");
+            if (firstBook != null) {
+                selectedNotebook = number(firstBook, "id");
+                JSONObject firstEntry = store.one("SELECT id FROM entries WHERE notebook_id=? ORDER BY entry_time DESC LIMIT 1", String.valueOf(selectedNotebook));
+                if (firstEntry != null) selectedEntry = number(firstEntry, "id");
+            }
         }
         render();
         if (!getPreferences(0).getBoolean("backup_prompted", false)) {
@@ -99,7 +105,22 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onPause() { saveNow(); super.onPause(); }
-    @Override protected void onDestroy() { backupWorker.shutdown(); super.onDestroy(); }
+    @Override protected void onSaveInstanceState(Bundle state) {
+        saveNow(); state.putLong("category", selectedCategory); state.putLong("notebook", selectedNotebook);
+        state.putLong("entry", selectedEntry); state.putInt("page", portraitPage); super.onSaveInstanceState(state);
+    }
+    @Override protected void onDestroy() {
+        handler.removeCallbacks(delayedSave);
+        if (delayedBackup != null) {
+            handler.removeCallbacks(delayedBackup);
+            String folder = getPreferences(0).getString("backup_folder", null);
+            if (folder != null) backupWorker.execute(() -> {
+                try { DiaryArchive.autoBackup(getApplicationContext(), store, Uri.parse(folder)); }
+                catch (Exception ignored) { }
+            });
+        }
+        backupWorker.shutdown(); super.onDestroy();
+    }
     @Override public void onBackPressed() {
         if (!wide() && portraitPage > 0) { saveNow(); portraitPage--; render(); }
         else super.onBackPressed();
@@ -164,7 +185,7 @@ public final class MainActivity extends Activity {
 
     private View topBar() {
         LinearLayout bar = row(); pad(bar, 12); bar.setBackgroundColor(Color.WHITE);
-        TextView title = label("纸间日记", 26, INK); title.setTypeface(null, 1);
+        TextView title = label("纸间日记", 26, INK); title.setTypeface(null, Typeface.BOLD);
         bar.addView(title, new LinearLayout.LayoutParams(0, -1, 1));
         status = label("已保存在本机", 14, MUTED);
         if (wide()) bar.addView(status, new LinearLayout.LayoutParams(-2, -1));
@@ -187,7 +208,7 @@ public final class MainActivity extends Activity {
 
     private View shelf() {
         LinearLayout pane = column(); pad(pane, 16); pane.setBackgroundColor(Color.rgb(244, 247, 244));
-        TextView heading = label("分类", 22, INK); heading.setTypeface(null, 1); addFull(pane, heading); gap(pane, 12);
+        TextView heading = label("分类", 22, INK); heading.setTypeface(null, Typeface.BOLD); addFull(pane, heading); gap(pane, 12);
         Button all = button("全部日记本", selectedCategory == -1); addFull(pane, all);
         all.setOnClickListener(v -> { saveNow(); selectedCategory = -1; render(); }); gap(pane, 6);
         JSONArray cats = store.query("SELECT * FROM categories ORDER BY name COLLATE NOCASE");
@@ -199,7 +220,7 @@ public final class MainActivity extends Activity {
         }
         Button addCategory = button("＋ 新建分类", false); addFull(pane, addCategory); addCategory.setOnClickListener(v -> addCategory());
         line(pane);
-        TextView notebooksTitle = label("日记本", 22, INK); notebooksTitle.setTypeface(null, 1); addFull(pane, notebooksTitle); gap(pane, 10);
+        TextView notebooksTitle = label("日记本", 22, INK); notebooksTitle.setTypeface(null, Typeface.BOLD); addFull(pane, notebooksTitle); gap(pane, 10);
         JSONArray books = selectedCategory < 0 ? store.query("SELECT * FROM notebooks ORDER BY created_at DESC") :
                 store.query("SELECT * FROM notebooks WHERE category_id=? ORDER BY created_at DESC", String.valueOf(selectedCategory));
         for (int i = 0; i < books.length(); i++) {
@@ -218,7 +239,7 @@ public final class MainActivity extends Activity {
         LinearLayout pane = column(); pad(pane, 16); pane.setBackgroundColor(Color.WHITE);
         JSONObject book = selectedNotebook < 0 ? null : store.one("SELECT * FROM notebooks WHERE id=?", String.valueOf(selectedNotebook));
         if (book == null) { selectedNotebook = -1; selectedEntry = -1; addFull(pane, label("先新建或选择一本日记本", 20, MUTED)); return pane; }
-        TextView heading = label(value(book, "name"), 22, INK); heading.setTypeface(null, 1); addFull(pane, heading); gap(pane, 12);
+        TextView heading = label(value(book, "name"), 22, INK); heading.setTypeface(null, Typeface.BOLD); addFull(pane, heading); gap(pane, 12);
         Button add = button("＋ 新建日记", true); addFull(pane, add); add.setOnClickListener(v -> addEntry());
         line(pane);
         JSONArray entries = store.query("SELECT * FROM entries WHERE notebook_id=? ORDER BY entry_time DESC, id DESC", String.valueOf(selectedNotebook));
@@ -227,7 +248,7 @@ public final class MainActivity extends Activity {
             JSONObject e = entries.optJSONObject(i); long id = number(e, "id");
             LinearLayout card = column(); pad(card, 12); card.setBackground(bg(id == selectedEntry ? PALE : PAPER, 12));
             String title = value(e, "title").trim();
-            TextView t = label(title.isEmpty() ? "无标题日记" : title, 19, INK); t.setTypeface(null, 1); addFull(card, t);
+            TextView t = label(title.isEmpty() ? "无标题日记" : title, 19, INK); t.setTypeface(null, Typeface.BOLD); addFull(card, t);
             addFull(card, label(shortDate(number(e, "entry_time")), 14, MUTED));
             String excerpt = value(e, "body").replace('\n', ' ').trim();
             if (!excerpt.isEmpty()) { TextView ex = label(excerpt.length() > 45 ? excerpt.substring(0, 45) + "…" : excerpt, 15, MUTED); ex.setMaxLines(2); addFull(card, ex); }
@@ -246,7 +267,7 @@ public final class MainActivity extends Activity {
         entryTime = number(e, "entry_time");
         latitude = e.isNull("latitude") ? null : e.optDouble("latitude");
         longitude = e.isNull("longitude") ? null : e.optDouble("longitude");
-        TextView heading = label("写日记", 23, INK); heading.setTypeface(null, 1); addFull(pane, heading); gap(pane, 14);
+        TextView heading = label("写日记", 23, INK); heading.setTypeface(null, Typeface.BOLD); addFull(pane, heading); gap(pane, 14);
         titleInput = input("给这篇日记起个标题", 24); titleInput.setText(value(e, "title")); addFull(pane, titleInput); gap(pane, 12);
         LinearLayout meta = row();
         Button time = button("日期时间  " + date(entryTime), false);
@@ -264,7 +285,7 @@ public final class MainActivity extends Activity {
         bodyInput.setMinHeight(dp(300)); bodyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
         bodyInput.setText(value(e, "body")); addFull(pane, bodyInput); gap(pane, 16);
         LinearLayout photoHeading = row();
-        TextView photoLabel = label("图片", 21, INK); photoLabel.setTypeface(null, 1);
+        TextView photoLabel = label("图片", 21, INK); photoLabel.setTypeface(null, Typeface.BOLD);
         photoHeading.addView(photoLabel, new LinearLayout.LayoutParams(0, dp(56), 1));
         Button addPhoto = button("＋ 添加本地图片", false); photoHeading.addView(addPhoto, new LinearLayout.LayoutParams(-2, dp(56)));
         addPhoto.setOnClickListener(v -> pickPhotos()); addFull(pane, photoHeading);
@@ -561,22 +582,30 @@ public final class MainActivity extends Activity {
     }
     private void receivePhotos(Intent data) {
         if (selectedEntry < 0) return;
+        long targetEntry = selectedEntry;
         ArrayList<Uri> uris = new ArrayList<>();
         if (data.getClipData() != null) for (int i = 0; i < data.getClipData().getItemCount(); i++) uris.add(data.getClipData().getItemAt(i).getUri());
         else if (data.getData() != null) uris.add(data.getData());
-        int added = 0;
-        for (Uri uri : uris) {
-            String mime = getContentResolver().getType(uri);
-            String ext = mime != null && mime.contains("png") ? ".png" : mime != null && mime.contains("webp") ? ".webp" :
-                    mime != null && (mime.contains("heic") || mime.contains("heif")) ? ".heic" : ".jpg";
-            String name = UUID.randomUUID() + ext; File file = new File(DiaryArchive.imageDir(this), name);
-            try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(file)) {
-                if (in == null) throw new IllegalStateException("无法读取图片");
-                byte[] bytes = new byte[64 * 1024]; int n; long size = 0;
-                while ((n = in.read(bytes)) != -1) { size += n; if (size > 80L * 1024 * 1024) throw new IllegalStateException("图片超过 80 MB"); out.write(bytes, 0, n); }
-                store.addPhoto(selectedEntry, name); added++;
-            } catch (Exception e) { file.delete(); message("有图片未能添加：" + e.getMessage()); }
-        }
-        if (added > 0) { scheduleBackup(); render(); message("已添加 " + added + " 张图片"); }
+        if (uris.isEmpty()) return;
+        AlertDialog progress = new AlertDialog.Builder(this).setMessage("正在保存图片到本机…").setCancelable(false).create();
+        progress.show();
+        backupWorker.execute(() -> {
+            int added = 0, failed = 0;
+            for (Uri uri : uris) {
+                String mime = getContentResolver().getType(uri);
+                String ext = mime != null && mime.contains("png") ? ".png" : mime != null && mime.contains("webp") ? ".webp" :
+                        mime != null && (mime.contains("heic") || mime.contains("heif")) ? ".heic" : ".jpg";
+                String name = UUID.randomUUID() + ext; File file = new File(DiaryArchive.imageDir(getApplicationContext()), name);
+                try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(file)) {
+                    if (in == null) throw new IllegalStateException("无法读取图片");
+                    byte[] bytes = new byte[64 * 1024]; int n; long size = 0;
+                    while ((n = in.read(bytes)) != -1) { size += n; if (size > 80L * 1024 * 1024) throw new IllegalStateException("图片超过 80 MB"); out.write(bytes, 0, n); }
+                    store.addPhoto(targetEntry, name); added++;
+                } catch (Exception e) { file.delete(); failed++; }
+            }
+            final int count = added, errors = failed;
+            runOnUiThread(() -> { progress.dismiss(); if (count > 0) { scheduleBackup(); render(); }
+                message("已添加 " + count + " 张图片" + (errors > 0 ? "，" + errors + " 张失败" : "")); });
+        });
     }
 }

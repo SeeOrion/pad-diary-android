@@ -2,5 +2,6 @@
 .idea/
 .android-sdk/
 local.properties
+.release/
 **/build/
 *.iml

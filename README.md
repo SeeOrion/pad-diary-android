@@ -12,7 +12,9 @@
 
 ## 构建与安装
 
-使用 Android Studio 打开此目录，安装 Android SDK Platform 35 和 Build Tools 35.0.0，然后运行 `./gradlew assembleDebug`。生成的 APK 位于 `app/build/outputs/apk/debug/app-debug.apk`，适用于 Android 8.0 及以上的平板。调试包可直接侧载安装；正式长期使用建议固定签名密钥构建发布包，避免以后因签名变化无法覆盖升级。
+使用 Android Studio 打开此目录，安装 Android SDK Platform 35 和 Build Tools 35.0.0，然后运行 `./gradlew assembleRelease`。当前机器已生成固定签名的发布包 `app/build/outputs/apk/release/app-release.apk`，适用于 Android 8.0 及以上的平板。请安装发布包，不要先安装 Debug 包（两者签名不同，不能直接互相覆盖升级）。
+
+发布签名保存在项目的 `.release/` 目录，已被 Git 忽略，不会推送到 GitHub。**请单独安全备份整个 `.release/` 目录。** 日后更新 App 必须沿用这份签名才能覆盖安装并保留原有日记。新电脑从 GitHub 克隆项目后，需要把 `.release/` 放回项目根目录再构建发布包。
 
 ## 迁移步骤
 
@@ -20,3 +22,7 @@
 2. 将 ZIP 文件复制到新平板。
 3. 新平板安装同一 App：“备份与迁移” → “导入备份并恢复”。
 4. 在新平板重新设置自动本地备份目录。
+
+## 验证范围
+
+已完成 APK 构建、Android Lint 检查和发布签名验证。当前没有连接安卓平板，因此尚未完成真实设备上的安装及逐项操作测试。
