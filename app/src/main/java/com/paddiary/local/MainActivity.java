@@ -89,12 +89,14 @@ public final class MainActivity extends Activity {
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(PAPER);
         if (Build.VERSION.SDK_INT >= 30) root.setOnApplyWindowInsetsListener((v, insets) -> {
             android.graphics.Insets bars = insets.getInsets(WindowInsets.Type.systemBars());
-            v.setPadding(bars.left, bars.top, bars.right, bars.bottom); return insets;
+            android.graphics.Insets keyboard = insets.getInsets(WindowInsets.Type.ime());
+            v.setPadding(bars.left, bars.top, bars.right, Math.max(bars.bottom, keyboard.bottom)); return insets;
         });
         setContentView(root);
         if (state != null) {
             selectedCategory = state.getLong("category", -1); selectedNotebook = state.getLong("notebook", -1);
             selectedEntry = state.getLong("entry", -1); portraitPage = state.getInt("page", 0);
+            coverTarget = state.getLong("cover_target", -1);
         } else {
             JSONObject firstBook = store.one("SELECT id FROM notebooks ORDER BY created_at DESC LIMIT 1");
             if (firstBook != null) {
@@ -116,7 +118,8 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() { saveNow(); super.onPause(); }
     @Override protected void onSaveInstanceState(Bundle state) {
         saveNow(); state.putLong("category", selectedCategory); state.putLong("notebook", selectedNotebook);
-        state.putLong("entry", selectedEntry); state.putInt("page", portraitPage); super.onSaveInstanceState(state);
+        state.putLong("entry", selectedEntry); state.putInt("page", portraitPage);
+        state.putLong("cover_target", coverTarget); super.onSaveInstanceState(state);
     }
     @Override protected void onDestroy() {
         handler.removeCallbacks(delayedSave);
@@ -226,21 +229,12 @@ public final class MainActivity extends Activity {
                 .setNegativeButton("取消", null).show();
     }
 
-    private void styleCoverButton(Button button, JSONObject book) {
-        String file = value(book, "cover_file");
-        int style = Math.floorMod(book.optInt("cover_style", 0), COVER_COLORS.length);
-        button.setBackground(bg(file.isEmpty() ? COVER_COLORS[style] : INK, 12));
-        button.setTextColor(Color.WHITE);
-        button.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
-        button.setText((file.isEmpty() ? "▣  " : "▧  ") + value(book, "name"));
-    }
-
     private View coverView(JSONObject book, int height) {
         android.widget.FrameLayout frame = new android.widget.FrameLayout(this);
         int style = Math.floorMod(book.optInt("cover_style", 0), COVER_COLORS.length);
         GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
                 new int[]{COVER_COLORS[style], Color.rgb(28, 49, 52)});
-        background.setCornerRadius(dp(14)); frame.setBackground(background);
+        background.setCornerRadius(dp(14)); frame.setBackground(background); frame.setClipToOutline(true);
         String file = value(book, "cover_file");
         if (!file.isEmpty()) {
             File coverFile = new File(DiaryArchive.coverDir(this), file);
@@ -361,8 +355,8 @@ public final class MainActivity extends Activity {
                 store.query("SELECT * FROM notebooks WHERE category_id=? ORDER BY created_at DESC", String.valueOf(selectedCategory));
         for (int i = 0; i < books.length(); i++) {
             JSONObject book = books.optJSONObject(i); long id = number(book, "id");
-            Button b = button("▸  " + value(book, "name"), selectedNotebook == id);
-            styleCoverButton(b, book); addFull(pane, b);
+            View b = coverView(book, dp(76));
+            pane.addView(b, new LinearLayout.LayoutParams(-1, dp(76)));
             b.setOnClickListener(v -> { saveNow(); selectedNotebook = id; selectedEntry = -1; portraitPage = 1; render(); });
             b.setOnLongClickListener(v -> { notebookMenu(book); return true; }); gap(pane, 8);
         }
@@ -427,7 +421,8 @@ public final class MainActivity extends Activity {
         RichText.decode(bodyInput.getText(), value(e, "body_styles"), uiScale, getResources().getDisplayMetrics().density);
         lineSpacing = (float)e.optDouble("line_spacing", 1.3);
         bodyInput.setLineSpacing(0, lineSpacing);
-        addFull(pane, formatToolbar()); gap(pane, 9);
+        addFull(pane, formatToolbar()); gap(pane, 5);
+        addFull(pane, label("选中文字可改字体；标题和列表作用于当前段落。", 13, MUTED)); gap(pane, 9);
         addFull(pane, bodyInput); gap(pane, 16);
         LinearLayout photoHeading = row();
         TextView photoLabel = label("图片", 21, INK); photoLabel.setTypeface(null, Typeface.BOLD);
@@ -555,7 +550,7 @@ public final class MainActivity extends Activity {
                     if (which == 0) nameDialog("重命名日记本", "日记本名称", value(book, "name"), name -> { store.rename("notebooks", id, name); scheduleBackup(); render(); });
                     else if (which == 1) chooseNotebookCategory(id);
                     else if (which == 2) notebookCoverMenu(book);
-                    else confirm("删除日记本及其中所有日记和图片？此操作无法撤销。", () -> {
+                    else confirm("删除日记本及其中所有日记、图片和封面？此操作无法撤销。", () -> {
                         JSONArray photos = store.query("SELECT p.file_name FROM photos p JOIN entries e ON e.id=p.entry_id WHERE e.notebook_id=?", String.valueOf(id));
                         store.delete("notebooks", id); deleteFiles(photos);
                         String cover = value(book, "cover_file");
@@ -718,7 +713,7 @@ public final class MainActivity extends Activity {
                 }
             });
         } else if (requestCode == IMPORT) {
-            confirm("导入会替换当前所有日记本、日记和图片。建议先导出当前数据。确认继续？", () -> {
+            confirm("导入会替换当前所有日记本、日记、图片和封面。建议先导出当前数据。确认继续？", () -> {
                 AlertDialog progress = new AlertDialog.Builder(this).setMessage("正在检查并导入备份…").setCancelable(false).create();
                 progress.show();
                 backupWorker.execute(() -> {
