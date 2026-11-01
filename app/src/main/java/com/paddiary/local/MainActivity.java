@@ -562,7 +562,10 @@ public final class MainActivity extends Activity {
                     if (out == null) throw new IllegalStateException("无法写入文件");
                     DiaryArchive.exportTo(getApplicationContext(), store, out);
                     runOnUiThread(() -> message("完整备份已导出"));
-                } catch (Exception e) { runOnUiThread(() -> message("导出失败：" + e.getMessage())); }
+                } catch (Exception e) {
+                    try { DocumentsContract.deleteDocument(getContentResolver(), uri); } catch (Exception ignored) { }
+                    runOnUiThread(() -> message("导出失败：" + e.getMessage()));
+                }
             });
         } else if (requestCode == IMPORT) {
             confirm("导入会替换当前所有日记本、日记和图片。建议先导出当前数据。确认继续？", () -> {

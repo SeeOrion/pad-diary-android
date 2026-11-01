@@ -29,9 +29,9 @@ import java.util.zip.ZipInputStream;
 import java.util.zip.ZipOutputStream;
 
 final class DiaryArchive {
-    private static final long MAX_ARCHIVE_BYTES = 1024L * 1024 * 1024;
+    private static final long MAX_ARCHIVE_BYTES = 20L * 1024 * 1024 * 1024;
     private static final long MAX_ITEM_BYTES = 80L * 1024 * 1024;
-    private static final int MAX_FILES = 10000;
+    private static final int MAX_FILES = 100000;
     private static final String BACKUP_PREFIX = "纸间日记-自动备份-";
 
     static File imageDir(Context context) {
@@ -78,7 +78,7 @@ final class DiaryArchive {
                     if (!name.equals("manifest.json") && !(name.startsWith("images/") && safeName(name.substring(7)))) throw new IOException("备份包含不安全路径");
                     if (name.equals("manifest.json")) {
                         ByteArrayOutputStream out = new ByteArrayOutputStream();
-                        total += copy(zip, out, 20L * 1024 * 1024);
+                        total += copy(zip, out, 50L * 1024 * 1024);
                         manifest = out.toByteArray();
                     } else {
                         try (OutputStream out = new FileOutputStream(new File(stage, name.substring(7)))) {
