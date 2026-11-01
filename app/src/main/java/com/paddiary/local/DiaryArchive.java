@@ -40,10 +40,18 @@ final class DiaryArchive {
         return dir;
     }
 
+    static File coverDir(Context context) {
+        File dir = new File(context.getFilesDir(), "covers");
+        if (!dir.exists() && !dir.mkdirs()) throw new IllegalStateException("无法建立封面目录");
+        return dir;
+    }
+
     static void exportTo(Context context, DiaryStore store, OutputStream target) throws Exception {
         JSONObject data = store.snapshot();
         JSONArray photos = data.getJSONArray("photos");
+        JSONArray notebooks = data.getJSONArray("notebooks");
         File images = imageDir(context);
+        File covers = coverDir(context);
         try (ZipOutputStream zip = new ZipOutputStream(target)) {
             zip.putNextEntry(new ZipEntry("manifest.json"));
             zip.write(data.toString().getBytes(StandardCharsets.UTF_8));
@@ -55,6 +63,17 @@ final class DiaryArchive {
                 File file = new File(images, name);
                 if (!file.isFile()) throw new IOException("备份中缺少图片：" + name);
                 zip.putNextEntry(new ZipEntry("images/" + name));
+                try (InputStream in = new FileInputStream(file)) { copy(in, zip, MAX_ITEM_BYTES); }
+                zip.closeEntry();
+            }
+            for (int i = 0; i < notebooks.length(); i++) {
+                JSONObject book = notebooks.getJSONObject(i);
+                String name = book.isNull("cover_file") ? "" : book.optString("cover_file", "");
+                if (name.isEmpty()) continue;
+                if (!safeName(name)) throw new IOException("封面名称不合法");
+                File file = new File(covers, name);
+                if (!file.isFile()) throw new IOException("备份中缺少封面：" + name);
+                zip.putNextEntry(new ZipEntry("covers/" + name));
                 try (InputStream in = new FileInputStream(file)) { copy(in, zip, MAX_ITEM_BYTES); }
                 zip.closeEntry();
             }
@@ -75,13 +94,16 @@ final class DiaryArchive {
                 while ((entry = zip.getNextEntry()) != null) {
                     String name = entry.getName();
                     if (entry.isDirectory() || !zipNames.add(name) || ++count > MAX_FILES) throw new IOException("备份文件结构不正确");
-                    if (!name.equals("manifest.json") && !(name.startsWith("images/") && safeName(name.substring(7)))) throw new IOException("备份包含不安全路径");
+                    if (!name.equals("manifest.json") && !(name.startsWith("images/") && safeName(name.substring(7))) &&
+                            !(name.startsWith("covers/") && safeName(name.substring(7)))) throw new IOException("备份包含不安全路径");
                     if (name.equals("manifest.json")) {
                         ByteArrayOutputStream out = new ByteArrayOutputStream();
                         total += copy(zip, out, 50L * 1024 * 1024);
                         manifest = out.toByteArray();
                     } else {
-                        try (OutputStream out = new FileOutputStream(new File(stage, name.substring(7)))) {
+                        File staged = new File(stage, name);
+                        if (!staged.getParentFile().exists() && !staged.getParentFile().mkdirs()) throw new IOException("无法保存临时文件");
+                        try (OutputStream out = new FileOutputStream(staged)) {
                             total += copy(zip, out, MAX_ITEM_BYTES);
                         }
                     }
@@ -91,7 +113,8 @@ final class DiaryArchive {
             }
             if (manifest == null) throw new IOException("备份缺少目录数据");
             JSONObject data = new JSONObject(new String(manifest, StandardCharsets.UTF_8));
-            if (data.getInt("format") != 1) throw new IOException("不支持此备份版本");
+            int format = data.getInt("format");
+            if (format != 1 && format != 2) throw new IOException("不支持此备份版本");
             JSONArray categories = data.getJSONArray("categories");
             JSONArray notebooks = data.getJSONArray("notebooks");
             JSONArray entries = data.getJSONArray("entries");
@@ -102,7 +125,7 @@ final class DiaryArchive {
                 JSONObject photo = photos.getJSONObject(i);
                 String oldName = photo.getString("file_name");
                 if (!safeName(oldName)) throw new IOException("图片名称不合法");
-                File staged = new File(stage, oldName);
+                File staged = new File(stage, "images/" + oldName);
                 if (!staged.isFile()) throw new IOException("备份中缺少图片：" + oldName);
                 String newName = UUID.randomUUID() + extension(oldName);
                 File dest = new File(images, newName);
@@ -110,12 +133,32 @@ final class DiaryArchive {
                 installed.add(dest);
                 photo.put("file_name", newName);
             }
+            File covers = coverDir(context);
+            for (int i = 0; i < notebooks.length(); i++) {
+                JSONObject book = notebooks.getJSONObject(i);
+                String oldName = book.isNull("cover_file") ? "" : book.optString("cover_file", "");
+                if (oldName.isEmpty()) continue;
+                if (!safeName(oldName)) throw new IOException("封面名称不合法");
+                File staged = new File(stage, "covers/" + oldName);
+                if (!staged.isFile()) throw new IOException("备份中缺少封面：" + oldName);
+                String newName = UUID.randomUUID() + extension(oldName);
+                File dest = new File(covers, newName);
+                try (InputStream in = new FileInputStream(staged); OutputStream out = new FileOutputStream(dest)) { copy(in, out, MAX_ITEM_BYTES); }
+                installed.add(dest);
+                book.put("cover_file", newName);
+            }
             JSONObject old = store.snapshot();
             store.replace(data);
             JSONArray oldPhotos = old.getJSONArray("photos");
             for (int i = 0; i < oldPhotos.length(); i++) {
                 String name = oldPhotos.getJSONObject(i).optString("file_name");
                 if (safeName(name)) new File(images, name).delete();
+            }
+            JSONArray oldBooks = old.getJSONArray("notebooks");
+            for (int i = 0; i < oldBooks.length(); i++) {
+                JSONObject book = oldBooks.getJSONObject(i);
+                String name = book.isNull("cover_file") ? "" : book.optString("cover_file", "");
+                if (safeName(name)) new File(covers, name).delete();
             }
             installed.clear();
         } catch (Exception e) {

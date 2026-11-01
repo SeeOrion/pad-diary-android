@@ -10,20 +10,27 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 final class DiaryStore extends SQLiteOpenHelper {
-    DiaryStore(Context context) { super(context, "diary.db", null, 1); }
+    DiaryStore(Context context) { super(context, "diary.db", null, 2); }
 
     @Override public void onConfigure(SQLiteDatabase db) { db.setForeignKeyConstraintsEnabled(true); }
 
     @Override public void onCreate(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE)");
-        db.execSQL("CREATE TABLE notebooks (id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL)");
-        db.execSQL("CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id INTEGER NOT NULL REFERENCES notebooks(id) ON DELETE CASCADE, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', entry_time INTEGER NOT NULL, place TEXT NOT NULL DEFAULT '', latitude REAL, longitude REAL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE notebooks (id INTEGER PRIMARY KEY AUTOINCREMENT, category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL, name TEXT NOT NULL, created_at INTEGER NOT NULL, cover_style INTEGER NOT NULL DEFAULT 0, cover_file TEXT)");
+        db.execSQL("CREATE TABLE entries (id INTEGER PRIMARY KEY AUTOINCREMENT, notebook_id INTEGER NOT NULL REFERENCES notebooks(id) ON DELETE CASCADE, title TEXT NOT NULL DEFAULT '', body TEXT NOT NULL DEFAULT '', body_styles TEXT NOT NULL DEFAULT '[]', line_spacing REAL NOT NULL DEFAULT 1.3, entry_time INTEGER NOT NULL, place TEXT NOT NULL DEFAULT '', latitude REAL, longitude REAL, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE photos (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER NOT NULL REFERENCES entries(id) ON DELETE CASCADE, file_name TEXT NOT NULL, sort_order INTEGER NOT NULL)");
         db.execSQL("CREATE INDEX entries_notebook_time ON entries(notebook_id, entry_time DESC)");
         db.execSQL("CREATE INDEX photos_entry ON photos(entry_id, sort_order)");
     }
 
-    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) { }
+    @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE notebooks ADD COLUMN cover_style INTEGER NOT NULL DEFAULT 0");
+            db.execSQL("ALTER TABLE notebooks ADD COLUMN cover_file TEXT");
+            db.execSQL("ALTER TABLE entries ADD COLUMN body_styles TEXT NOT NULL DEFAULT '[]'");
+            db.execSQL("ALTER TABLE entries ADD COLUMN line_spacing REAL NOT NULL DEFAULT 1.3");
+        }
+    }
 
     private static JSONObject row(Cursor c) {
         JSONObject o = new JSONObject();
@@ -69,12 +76,19 @@ final class DiaryStore extends SQLiteOpenHelper {
         return getWritableDatabase().insertOrThrow("entries", null, v);
     }
 
-    synchronized void saveEntry(long id, String title, String body, long time, String place, Double lat, Double lon) {
+    synchronized void saveEntry(long id, String title, String body, String styles, float spacing, long time, String place, Double lat, Double lon) {
         ContentValues v = new ContentValues(); v.put("title", title); v.put("body", body);
+        v.put("body_styles", styles); v.put("line_spacing", spacing);
         v.put("entry_time", time); v.put("place", place); v.put("updated_at", System.currentTimeMillis());
         if (lat == null) v.putNull("latitude"); else v.put("latitude", lat);
         if (lon == null) v.putNull("longitude"); else v.put("longitude", lon);
         getWritableDatabase().update("entries", v, "id=?", new String[]{String.valueOf(id)});
+    }
+
+    synchronized void setCover(long id, int style, String fileName) {
+        ContentValues v = new ContentValues(); v.put("cover_style", style);
+        if (fileName == null) v.putNull("cover_file"); else v.put("cover_file", fileName);
+        getWritableDatabase().update("notebooks", v, "id=?", new String[]{String.valueOf(id)});
     }
 
     synchronized long addPhoto(long entryId, String fileName) {
@@ -102,7 +116,7 @@ final class DiaryStore extends SQLiteOpenHelper {
     }
 
     synchronized JSONObject snapshot() throws JSONException {
-        JSONObject o = new JSONObject(); o.put("format", 1);
+        JSONObject o = new JSONObject(); o.put("format", 2);
         o.put("categories", query("SELECT * FROM categories ORDER BY id"));
         o.put("notebooks", query("SELECT * FROM notebooks ORDER BY id"));
         o.put("entries", query("SELECT * FROM entries ORDER BY id"));
@@ -117,8 +131,8 @@ final class DiaryStore extends SQLiteOpenHelper {
             db.delete("photos", null, null); db.delete("entries", null, null);
             db.delete("notebooks", null, null); db.delete("categories", null, null);
             insertRows(db, "categories", data.getJSONArray("categories"), new String[]{"id","name"});
-            insertRows(db, "notebooks", data.getJSONArray("notebooks"), new String[]{"id","category_id","name","created_at"});
-            insertRows(db, "entries", data.getJSONArray("entries"), new String[]{"id","notebook_id","title","body","entry_time","place","latitude","longitude","created_at","updated_at"});
+            insertRows(db, "notebooks", data.getJSONArray("notebooks"), new String[]{"id","category_id","name","created_at","cover_style","cover_file"});
+            insertRows(db, "entries", data.getJSONArray("entries"), new String[]{"id","notebook_id","title","body","body_styles","line_spacing","entry_time","place","latitude","longitude","created_at","updated_at"});
             insertRows(db, "photos", data.getJSONArray("photos"), new String[]{"id","entry_id","file_name","sort_order"});
             db.setTransactionSuccessful();
         } finally { db.endTransaction(); }
@@ -128,6 +142,7 @@ final class DiaryStore extends SQLiteOpenHelper {
         for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.getJSONObject(i); ContentValues v = new ContentValues();
             for (String column : columns) {
+                if (!row.has(column)) continue;
                 Object value = row.get(column);
                 if (value == JSONObject.NULL) v.putNull(column);
                 else if (value instanceof Integer) v.put(column, (Integer)value);

@@ -37,7 +37,11 @@ import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.TimePicker;
 import android.text.Editable;
+import android.text.Spanned;
 import android.text.TextWatcher;
+import android.text.style.AbsoluteSizeSpan;
+import android.text.style.StyleSpan;
+import android.text.style.TypefaceSpan;
 import android.database.sqlite.SQLiteException;
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -55,7 +59,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 public final class MainActivity extends Activity {
-    private static final int IMPORT = 11, EXPORT = 12, PHOTOS = 13, BACKUP_FOLDER = 14, LOCATION = 15;
+    private static final int IMPORT = 11, EXPORT = 12, PHOTOS = 13, BACKUP_FOLDER = 14, LOCATION = 15, COVER = 16;
     private static final int INK = Color.rgb(34, 48, 50), MUTED = Color.rgb(98, 110, 110);
     private static final int TEAL = Color.rgb(23, 113, 109), PALE = Color.rgb(232, 244, 241), PAPER = Color.rgb(250, 249, 245);
     private DiaryStore store;
@@ -71,10 +75,15 @@ public final class MainActivity extends Activity {
     private Double latitude, longitude;
     private int portraitPage = 0;
     private boolean rendering = false;
+    private float uiScale = 1f, lineSpacing = 1.3f;
+    private long coverTarget = -1;
+    private static final int[] COVER_COLORS = {0xff18736d, 0xffd27b64, 0xff647ca8, 0xff8c75a0, 0xffba9a58, 0xff628477};
+    private static final String[] COVER_NAMES = {"松绿", "暖陶", "远蓝", "暮紫", "麦金", "苔青"};
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         store = new DiaryStore(this);
+        uiScale = getPreferences(0).getFloat("ui_scale", 1f);
         getWindow().setStatusBarColor(TEAL);
         getWindow().setNavigationBarColor(INK);
         root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setBackgroundColor(PAPER);
@@ -131,7 +140,7 @@ public final class MainActivity extends Activity {
     private boolean wide() { return getResources().getConfiguration().screenWidthDp >= 840; }
     private String date(long time) { return new SimpleDateFormat("yyyy年M月d日 HH:mm", Locale.CHINA).format(new Date(time)); }
     private String shortDate(long time) { return new SimpleDateFormat("M月d日  HH:mm", Locale.CHINA).format(new Date(time)); }
-    private String value(JSONObject o, String key) { return o == null ? "" : o.optString(key, ""); }
+    private String value(JSONObject o, String key) { return o == null || o.isNull(key) ? "" : o.optString(key, ""); }
     private long number(JSONObject o, String key) { return o == null ? -1 : o.optLong(key, -1); }
     private void message(String text) { android.widget.Toast.makeText(this, text, android.widget.Toast.LENGTH_LONG).show(); }
 
@@ -139,11 +148,11 @@ public final class MainActivity extends Activity {
         GradientDrawable d = new GradientDrawable(); d.setColor(color); d.setCornerRadius(dp(radius)); return d;
     }
     private TextView label(String text, int size, int color) {
-        TextView v = new TextView(this); v.setText(text); v.setTextSize(size); v.setTextColor(color);
+        TextView v = new TextView(this); v.setText(text); v.setTextSize(size * uiScale); v.setTextColor(color);
         v.setGravity(Gravity.CENTER_VERTICAL); return v;
     }
     private Button button(String text, boolean filled) {
-        Button b = new Button(this); b.setText(text); b.setAllCaps(false); b.setTextSize(17);
+        Button b = new Button(this); b.setText(text); b.setAllCaps(false); b.setTextSize(17 * uiScale);
         b.setTextColor(filled ? Color.WHITE : TEAL); b.setBackground(bg(filled ? TEAL : PALE, 12));
         b.setMinHeight(dp(52)); b.setPadding(dp(14), dp(8), dp(14), dp(8)); return b;
     }
@@ -155,7 +164,7 @@ public final class MainActivity extends Activity {
         ScrollView s = new ScrollView(this); s.setFillViewport(true); s.addView(child); return s;
     }
     private EditText input(String hint, int size) {
-        EditText e = new EditText(this); e.setHint(hint); e.setTextSize(size); e.setTextColor(INK);
+        EditText e = new EditText(this); e.setHint(hint); e.setTextSize(size * uiScale); e.setTextColor(INK);
         e.setHintTextColor(MUTED); e.setSingleLine(true); e.setPadding(dp(12), dp(12), dp(12), dp(12));
         e.setBackground(bg(Color.WHITE, 10)); return e;
     }
@@ -191,6 +200,8 @@ public final class MainActivity extends Activity {
         if (wide()) bar.addView(status, new LinearLayout.LayoutParams(-2, -1));
         Button backup = button("备份与迁移", false); backup.setOnClickListener(v -> backupMenu());
         LinearLayout.LayoutParams bp = new LinearLayout.LayoutParams(-2, -1); bp.leftMargin = dp(8); bar.addView(backup, bp);
+        Button display = button("字体", false); display.setOnClickListener(v -> chooseUiScale());
+        LinearLayout.LayoutParams fp = new LinearLayout.LayoutParams(-2, -1); fp.leftMargin = dp(8); bar.addView(display, fp);
         return bar;
     }
 
@@ -204,6 +215,131 @@ public final class MainActivity extends Activity {
             b.setOnClickListener(v -> { saveNow(); portraitPage = index; render(); });
         }
         return tabs;
+    }
+
+    private void chooseUiScale() {
+        String[] choices = {"标准", "稍大", "大字", "特大字"};
+        float[] sizes = {1f, 1.12f, 1.25f, 1.4f};
+        new AlertDialog.Builder(this).setTitle("页面字体大小")
+                .setSingleChoiceItems(choices, uiScale < 1.06f ? 0 : uiScale < 1.19f ? 1 : uiScale < 1.32f ? 2 : 3,
+                        (d, which) -> { saveNow(); uiScale = sizes[which]; getPreferences(0).edit().putFloat("ui_scale", uiScale).apply(); d.dismiss(); render(); })
+                .setNegativeButton("取消", null).show();
+    }
+
+    private void styleCoverButton(Button button, JSONObject book) {
+        String file = value(book, "cover_file");
+        int style = Math.floorMod(book.optInt("cover_style", 0), COVER_COLORS.length);
+        button.setBackground(bg(file.isEmpty() ? COVER_COLORS[style] : INK, 12));
+        button.setTextColor(Color.WHITE);
+        button.setGravity(Gravity.START | Gravity.CENTER_VERTICAL);
+        button.setText((file.isEmpty() ? "▣  " : "▧  ") + value(book, "name"));
+    }
+
+    private View coverView(JSONObject book, int height) {
+        android.widget.FrameLayout frame = new android.widget.FrameLayout(this);
+        int style = Math.floorMod(book.optInt("cover_style", 0), COVER_COLORS.length);
+        GradientDrawable background = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{COVER_COLORS[style], Color.rgb(28, 49, 52)});
+        background.setCornerRadius(dp(14)); frame.setBackground(background);
+        String file = value(book, "cover_file");
+        if (!file.isEmpty()) {
+            File coverFile = new File(DiaryArchive.coverDir(this), file);
+            BitmapFactory.Options options = new BitmapFactory.Options(); options.inJustDecodeBounds = true;
+            BitmapFactory.decodeFile(coverFile.getAbsolutePath(), options);
+            options.inSampleSize = Math.max(1, Math.max(options.outWidth / 700, options.outHeight / 400)); options.inJustDecodeBounds = false;
+            Bitmap bitmap = BitmapFactory.decodeFile(coverFile.getAbsolutePath(), options);
+            if (bitmap != null) {
+                ImageView image = new ImageView(this); image.setImageBitmap(bitmap); image.setScaleType(ImageView.ScaleType.CENTER_CROP);
+                frame.addView(image, new android.widget.FrameLayout.LayoutParams(-1, -1));
+            }
+        }
+        TextView title = label(value(book, "name"), 21, Color.WHITE);
+        title.setTypeface(null, Typeface.BOLD); title.setShadowLayer(dp(3), 0, dp(2), Color.BLACK);
+        android.widget.FrameLayout.LayoutParams p = new android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM);
+        p.setMargins(dp(15), dp(8), dp(15), dp(15)); frame.addView(title, p);
+        frame.setMinimumHeight(height);
+        frame.setLayoutParams(new LinearLayout.LayoutParams(-1, height));
+        return frame;
+    }
+
+    private void notebookCoverMenu(JSONObject book) {
+        long bookId = number(book, "id");
+        String[] choices = new String[COVER_NAMES.length + 1];
+        for (int i = 0; i < COVER_NAMES.length; i++) choices[i] = "内置封面 · " + COVER_NAMES[i];
+        choices[COVER_NAMES.length] = "从本地图片选择封面";
+        new AlertDialog.Builder(this).setTitle("选择日记本封面").setItems(choices, (d, which) -> {
+            if (which == COVER_NAMES.length) {
+                coverTarget = bookId;
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                intent.setType("image/*"); intent.addCategory(Intent.CATEGORY_OPENABLE);
+                startActivityForResult(intent, COVER);
+            } else {
+                String old = value(book, "cover_file");
+                store.setCover(bookId, which, null);
+                if (!old.isEmpty()) new File(DiaryArchive.coverDir(this), old).delete();
+                scheduleBackup(); render();
+            }
+        }).show();
+    }
+
+    private View formatToolbar() {
+        HorizontalScrollView strip = new HorizontalScrollView(this); strip.setHorizontalScrollBarEnabled(false);
+        LinearLayout tools = row();
+        addTool(tools, "标题1", () -> paragraph("heading", 1));
+        addTool(tools, "标题2", () -> paragraph("heading", 2));
+        addTool(tools, "标题3", () -> paragraph("heading", 3));
+        addTool(tools, "加粗", () -> inline(new StyleSpan(Typeface.BOLD)));
+        addTool(tools, "斜体", () -> inline(new StyleSpan(Typeface.ITALIC)));
+        addTool(tools, "字体", this::chooseBodyFont);
+        addTool(tools, "字号", this::chooseBodySize);
+        addTool(tools, "行距", this::chooseLineSpacing);
+        addTool(tools, "• 项目符号", () -> paragraph("bullet", 0));
+        addTool(tools, "1. 编号", () -> paragraph("numbered", 0));
+        addTool(tools, "普通段落", () -> paragraph("plain", 0));
+        strip.addView(tools); return strip;
+    }
+
+    private void addTool(LinearLayout bar, String text, Runnable action) {
+        Button b = button(text, false); b.setTextSize(15 * uiScale);
+        LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-2, dp(48)); p.rightMargin = dp(6); bar.addView(b, p);
+        b.setOnClickListener(v -> action.run());
+    }
+
+    private void inline(Object span) {
+        if (bodyInput == null) return;
+        int start = bodyInput.getSelectionStart(), end = bodyInput.getSelectionEnd();
+        if (start < 0 || end <= start) { message("请先选中要设置格式的文字"); return; }
+        RichText.applyInline(bodyInput.getText(), start, end, span);
+        bodyInput.setSelection(start, end); saveNow();
+    }
+
+    private void paragraph(String kind, int value) {
+        if (bodyInput == null) return;
+        RichText.applyParagraph(bodyInput.getText(), Math.max(0, bodyInput.getSelectionStart()),
+                Math.max(0, bodyInput.getSelectionEnd()), kind, value, uiScale, getResources().getDisplayMetrics().density);
+        saveNow();
+    }
+
+    private void chooseBodyFont() {
+        String[] names = {"默认字体", "衬线字体", "等宽字体", "手写风格"};
+        String[] families = {"sans-serif", "serif", "monospace", "cursive"};
+        new AlertDialog.Builder(this).setTitle("选中文字的字体")
+                .setItems(names, (d, which) -> inline(new TypefaceSpan(families[which]))).show();
+    }
+
+    private void chooseBodySize() {
+        int[] sizes = {16, 18, 20, 24, 28, 32, 38};
+        String[] names = new String[sizes.length];
+        for (int i = 0; i < sizes.length; i++) names[i] = sizes[i] + " 号";
+        new AlertDialog.Builder(this).setTitle("选中文字的字号")
+                .setItems(names, (d, which) -> inline(new AbsoluteSizeSpan((int)(sizes[which] * uiScale), true))).show();
+    }
+
+    private void chooseLineSpacing() {
+        String[] names = {"紧凑 · 1.0", "舒适 · 1.3", "宽松 · 1.6", "特宽 · 2.0"};
+        float[] values = {1f, 1.3f, 1.6f, 2f};
+        new AlertDialog.Builder(this).setTitle("正文行距")
+                .setItems(names, (d, which) -> { lineSpacing = values[which]; bodyInput.setLineSpacing(0, lineSpacing); saveNow(); }).show();
     }
 
     private View shelf() {
@@ -225,7 +361,8 @@ public final class MainActivity extends Activity {
                 store.query("SELECT * FROM notebooks WHERE category_id=? ORDER BY created_at DESC", String.valueOf(selectedCategory));
         for (int i = 0; i < books.length(); i++) {
             JSONObject book = books.optJSONObject(i); long id = number(book, "id");
-            Button b = button("▸  " + value(book, "name"), selectedNotebook == id); addFull(pane, b);
+            Button b = button("▸  " + value(book, "name"), selectedNotebook == id);
+            styleCoverButton(b, book); addFull(pane, b);
             b.setOnClickListener(v -> { saveNow(); selectedNotebook = id; selectedEntry = -1; portraitPage = 1; render(); });
             b.setOnLongClickListener(v -> { notebookMenu(book); return true; }); gap(pane, 8);
         }
@@ -240,6 +377,9 @@ public final class MainActivity extends Activity {
         JSONObject book = selectedNotebook < 0 ? null : store.one("SELECT * FROM notebooks WHERE id=?", String.valueOf(selectedNotebook));
         if (book == null) { selectedNotebook = -1; selectedEntry = -1; addFull(pane, label("先新建或选择一本日记本", 20, MUTED)); return pane; }
         TextView heading = label(value(book, "name"), 22, INK); heading.setTypeface(null, Typeface.BOLD); addFull(pane, heading); gap(pane, 12);
+        View cover = coverView(book, dp(105)); addFull(pane, cover); gap(pane, 10);
+        Button changeCover = button("更换日记本封面", false); addFull(pane, changeCover);
+        changeCover.setOnClickListener(v -> notebookCoverMenu(book)); gap(pane, 12);
         Button add = button("＋ 新建日记", true); addFull(pane, add); add.setOnClickListener(v -> addEntry());
         line(pane);
         JSONArray entries = store.query("SELECT * FROM entries WHERE notebook_id=? ORDER BY entry_time DESC, id DESC", String.valueOf(selectedNotebook));
@@ -283,7 +423,12 @@ public final class MainActivity extends Activity {
         gap(pane, 14);
         bodyInput = input("今天发生了什么？", 20); bodyInput.setSingleLine(false); bodyInput.setGravity(Gravity.TOP);
         bodyInput.setMinHeight(dp(300)); bodyInput.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE | android.text.InputType.TYPE_TEXT_FLAG_CAP_SENTENCES);
-        bodyInput.setText(value(e, "body")); addFull(pane, bodyInput); gap(pane, 16);
+        bodyInput.setText(value(e, "body"));
+        RichText.decode(bodyInput.getText(), value(e, "body_styles"), uiScale, getResources().getDisplayMetrics().density);
+        lineSpacing = (float)e.optDouble("line_spacing", 1.3);
+        bodyInput.setLineSpacing(0, lineSpacing);
+        addFull(pane, formatToolbar()); gap(pane, 9);
+        addFull(pane, bodyInput); gap(pane, 16);
         LinearLayout photoHeading = row();
         TextView photoLabel = label("图片", 21, INK); photoLabel.setTypeface(null, Typeface.BOLD);
         photoHeading.addView(photoLabel, new LinearLayout.LayoutParams(0, dp(56), 1));
@@ -329,7 +474,8 @@ public final class MainActivity extends Activity {
         handler.removeCallbacks(delayedSave);
         if (selectedEntry < 0 || titleInput == null || bodyInput == null || placeInput == null) return;
         try {
-            store.saveEntry(selectedEntry, titleInput.getText().toString(), bodyInput.getText().toString(), entryTime,
+            store.saveEntry(selectedEntry, titleInput.getText().toString(), bodyInput.getText().toString(),
+                    RichText.encode(bodyInput.getText(), uiScale), lineSpacing, entryTime,
                     placeInput.getText().toString(), latitude, longitude);
             if (status != null) status.setText("已保存在本机");
             scheduleBackup();
@@ -405,12 +551,15 @@ public final class MainActivity extends Activity {
         saveNow();
         long id = number(book, "id");
         new AlertDialog.Builder(this).setTitle(value(book, "name"))
-                .setItems(new String[]{"重命名", "移动到分类", "删除日记本"}, (d, which) -> {
+                .setItems(new String[]{"重命名", "移动到分类", "更换封面", "删除日记本"}, (d, which) -> {
                     if (which == 0) nameDialog("重命名日记本", "日记本名称", value(book, "name"), name -> { store.rename("notebooks", id, name); scheduleBackup(); render(); });
                     else if (which == 1) chooseNotebookCategory(id);
+                    else if (which == 2) notebookCoverMenu(book);
                     else confirm("删除日记本及其中所有日记和图片？此操作无法撤销。", () -> {
                         JSONArray photos = store.query("SELECT p.file_name FROM photos p JOIN entries e ON e.id=p.entry_id WHERE e.notebook_id=?", String.valueOf(id));
                         store.delete("notebooks", id); deleteFiles(photos);
+                        String cover = value(book, "cover_file");
+                        if (!cover.isEmpty()) new File(DiaryArchive.coverDir(this), cover).delete();
                         if (selectedNotebook == id) { selectedNotebook = -1; selectedEntry = -1; }
                         scheduleBackup(); render();
                     });
@@ -545,6 +694,7 @@ public final class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
         if (resultCode != RESULT_OK || data == null) return;
         if (requestCode == PHOTOS) { receivePhotos(data); return; }
+        if (requestCode == COVER) { receiveCover(data); return; }
         Uri uri = data.getData(); if (uri == null) return;
         if (requestCode == BACKUP_FOLDER) {
             try {
@@ -610,5 +760,30 @@ public final class MainActivity extends Activity {
             runOnUiThread(() -> { progress.dismiss(); if (count > 0) { scheduleBackup(); render(); }
                 message("已添加 " + count + " 张图片" + (errors > 0 ? "，" + errors + " 张失败" : "")); });
         });
+    }
+
+    private void receiveCover(Intent data) {
+        Uri uri = data.getData(); long target = coverTarget; coverTarget = -1;
+        if (uri == null || target < 0) return;
+        JSONObject book = store.one("SELECT * FROM notebooks WHERE id=?", String.valueOf(target));
+        if (book == null) return;
+        String mime = getContentResolver().getType(uri);
+        String ext = mime != null && mime.contains("png") ? ".png" : mime != null && mime.contains("webp") ? ".webp" :
+                mime != null && (mime.contains("heic") || mime.contains("heif")) ? ".heic" : ".jpg";
+        String name = UUID.randomUUID() + ext;
+        File file = new File(DiaryArchive.coverDir(this), name);
+        try (InputStream in = getContentResolver().openInputStream(uri); OutputStream out = new FileOutputStream(file)) {
+            if (in == null) throw new IllegalStateException("无法读取封面图片");
+            byte[] bytes = new byte[64 * 1024]; int n; long size = 0;
+            while ((n = in.read(bytes)) != -1) {
+                size += n; if (size > 80L * 1024 * 1024) throw new IllegalStateException("封面图片超过 80 MB");
+                out.write(bytes, 0, n);
+            }
+            if (size == 0) throw new IllegalStateException("图片为空");
+            String old = value(book, "cover_file");
+            store.setCover(target, book.optInt("cover_style", 0), name);
+            if (!old.isEmpty()) new File(DiaryArchive.coverDir(this), old).delete();
+            scheduleBackup(); render(); message("日记本封面已保存");
+        } catch (Exception e) { file.delete(); message("设置封面失败：" + e.getMessage()); }
     }
 }
